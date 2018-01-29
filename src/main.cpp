@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -18,6 +19,7 @@ using json = nlohmann::json;
 constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
+const double meters_per_timestep = 0.43; // a little bit less than 50 mph
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -200,8 +202,22 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-                     uWS::OpCode opCode) {
+  int lane = 1;
+
+  h.onMessage(
+      [
+        &map_waypoints_x,
+        &map_waypoints_y,
+        &map_waypoints_s,
+        &map_waypoints_dx,
+        &map_waypoints_dy,
+        &lane
+      ](
+        uWS::WebSocket<uWS::SERVER> ws,
+        char *data,
+        size_t length,
+        uWS::OpCode opCode
+        ) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -244,6 +260,170 @@ int main() {
 
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+            //
+            // 1. Define a smooth path around the waypoints
+            // 2. Find a trajectory close to the smooth path
+            // 3. Plan a course to follow the trajectory
+            // 4. Return points along the course
+            //
+
+
+            vector<double> s_d;
+            double current_x = car_x;
+            double current_y = car_y;
+            double car_yaw_radians = deg2rad(car_yaw);
+
+            int waypoint_index = NextWaypoint(current_x, current_y, car_yaw_radians, map_waypoints_x, map_waypoints_y);
+					
+            // convert waypoints into a vehicle-origin coordinate system
+            // and map out the next several waypoints in that system
+            int waypoint_count = 4;
+            int waypoint_distance = 25;
+						std::vector<double> vehicle_x = {0.0}; // start at the vehicle location
+						std::vector<double> vehicle_y = {0.0}; // start at the vehicle location
+						for (int i = 0; i < waypoint_count; ++i) {
+              //int next_index = (waypoint_index + i) % map_waypoints_x.size();
+
+              // find the (x, y) coordinates of the frenet coordinate i positions into the future
+              vector<double> waypoint = getXY(
+                //map_waypoints_s[next_index],
+                car_s + waypoint_distance * (i + 1),
+                2 + 4 * lane,
+                map_waypoints_s,
+                map_waypoints_x,
+                map_waypoints_y
+              );
+
+              double map_x = waypoint[0];
+              double map_y = waypoint[1];
+
+              /*double map_x = map_waypoints_x[next_index];
+              double map_y = map_waypoints_y[next_index];
+              // add frenet lane shift to x and y
+
+              map_x += (2 + (lane * 4)) * map_waypoints_dx[next_index];
+              map_y += (2 + (lane * 4)) * map_waypoints_dy[next_index];*/
+
+							double delta_x = map_x - car_x;
+							double delta_y = map_y - car_y;
+							vehicle_x.push_back(delta_x * cos(-car_yaw_radians) - delta_y * sin(-car_yaw_radians));
+							vehicle_y.push_back(delta_x * sin(-car_yaw_radians) + delta_y * cos(-car_yaw_radians));
+						}
+            //for (int i = 0; i < vehicle_x.size(); i++) {
+            //  cout << "@(" << vehicle_x[i] << ", " << vehicle_y[i] << ")@\n";
+            //}
+
+            // initial attempt at spline implementation
+            /*
+            vector<double> spline_x = {0.0};
+            vector<double> spline_y = {0.0};
+            for (int i = 0; i < 3; ++i) {
+              int next_index = (waypoint_index + 1 + i) % map_waypoints_x.size();
+              if (abs(map_waypoints_x[next_index] - current_x) > abs(spline_x[spline_x.size() - 1] - current_x)) {
+                spline_x.push_back(map_waypoints_x[next_index]);
+                spline_y.push_back(map_waypoints_y[next_index]);
+              } else {
+                break;
+              }
+            }
+            if (spline_x[spline_x.size() - 1] < current_x) {
+              reverse(spline_x.begin(), spline_x.end());
+              reverse(spline_y.begin(), spline_y.end());
+            }*/
+            /*for (int i = 0; i < spline_x.size(); ++i) {
+              cout << spline_x[i] << " ";
+            }
+            cout << endl;
+            for (int i = 0; i < spline_x.size(); ++i) {
+              cout << spline_y[i] << " ";
+            }
+            cout << endl;*/
+
+            tk::spline waypoint_spline;
+            waypoint_spline.set_points(vehicle_x, vehicle_y);
+
+            // add previous trajectory to ensure continuity
+            // KEEP THIS
+            for (int i = 0; i < previous_path_x.size(); ++i) {
+              next_x_vals.push_back(previous_path_x[i]);
+              current_x = previous_path_x[i];
+              next_y_vals.push_back(previous_path_y[i]);
+              current_y = previous_path_y[i];
+            }
+
+            // calculate current angle
+            //if (previous_path_x.size() > 1) {
+            //  int path_size = previous_path_x.size();
+            //  // bad!
+            //  //car_yaw_radians = atan2((double)previous_path_y[path_size - 1] - (double)previous_path_y[path_size - 2], (double)previous_path_x[path_size - 1] - (double)previous_path_x[path_size - 2]);
+            //}
+
+            // follow frenet coordinates
+            /*
+            if (previous_path_x.size() > 0) {
+              for (int i = 0; i < previous_path_x.size() - 1; ++i) {
+                current_x = previous_path_x[i];
+                current_y = previous_path_y[i];
+                next_x_vals.push_back(current_x);
+                next_y_vals.push_back(current_y);
+              }
+              current_x = previous_path_x[previous_path_x.size() - 1];
+              current_y = previous_path_y[previous_path_x.size() - 1];
+              s_d = getFrenet(current_x, current_y, car_yaw_radians, map_waypoints_x, map_waypoints_y);
+            } else {
+              s_d = {car_s, car_d};
+            }
+
+            double next_s = s_d[0]; // + meters_per_timestep;
+            double next_d = s_d[1]; // 2 + (s_d[1] - 2) * 0.8;
+            */
+
+            /*for (int i = 0; i < 100; ++i) {
+              vector<double> x_y = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+              next_x_vals.push_back(x_y[0]);
+              next_y_vals.push_back(x_y[1]);
+              next_s += meters_per_timestep;
+              next_d = 2 + (next_d - 2) * 0.8;
+            }*/
+
+            //if (next_x_vals.size() < 2) {
+            cout << "!(" << current_x << ", " << current_y << ")! ";
+            double current_delta_x = current_x - car_x;
+            double current_delta_y = current_y - car_y;
+            double current_vehicle_x = current_delta_x * cos(-car_yaw_radians) - current_delta_y * sin(-car_yaw_radians);
+            double current_vehicle_y = current_delta_x * sin(-car_yaw_radians) + current_delta_y * cos(-car_yaw_radians);
+
+            cout << "Car yaw radians: " << car_yaw_radians << " " << car_yaw <<  "\n";
+            cout << "^(" << current_vehicle_x << ", " << current_vehicle_y << ")^\n";
+            double transform_x_test = current_vehicle_x * cos(car_yaw_radians) - current_vehicle_y * sin(car_yaw_radians);
+            double transform_y_test = current_vehicle_x * sin(car_yaw_radians) + current_vehicle_y * cos(car_yaw_radians);
+            transform_x_test += car_x;
+            transform_y_test += car_y;
+            cout << "%(" << transform_x_test << "," << transform_y_test << ")%\n";
+            
+            
+            int remaining_points = 50 - previous_path_x.size();
+            double total_distance = remaining_points * meters_per_timestep;
+            for (int i = 0; i < remaining_points; ++i) {
+              double x = current_vehicle_x + (meters_per_timestep * i);
+              double y = waypoint_spline(x);
+              cout << "~(" << x << "," << y << ")~\n";
+              // convert back to map coordinates
+              double transformed_x = x * cos(car_yaw_radians) - y * sin(car_yaw_radians);
+              double transformed_y = x * sin(car_yaw_radians) + y * cos(car_yaw_radians);
+              transformed_x += car_x; // current_x;
+              transformed_y += car_y; // current_y;
+              cout << "(" << transformed_x << "," << transformed_y << ")\n";
+              next_x_vals.push_back(transformed_x);
+              next_y_vals.push_back(transformed_y);
+            }
+            //}
+
+            for (int i = 0; i < next_x_vals.size(); ++i) {
+              cout << "(" << next_x_vals[i] << "," << next_y_vals[i] << ") \n";
+            }
+            cout << endl;
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
