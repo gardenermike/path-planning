@@ -573,9 +573,6 @@ int main() {
           // cut it into pieces and jerk-minimize each component
           int trajectory_components = 4;
           int points_per_component = steps_in_trajectory / trajectory_components;
-          //double current_velocity = car_speed * 0.44704; // convert to meters/second
-          //double current_vehicle_x = current_delta_x * cos(-car_yaw_radians) - current_delta_y * sin(-car_yaw_radians);
-          //double current_vehicle_y = current_delta_x * sin(-car_yaw_radians) + current_delta_y * cos(-car_yaw_radians);
           
           for (int i = 0; i < trajectory_components; i++) {
             // start point
@@ -687,9 +684,6 @@ int main() {
               transformed_x += car_x;
               transformed_y += car_y;
               int current_index = start_index + timestep;
-              //if (transformed_x != next_x_vals[current_index]) {
-              //  cout << transformed_x - next_x_vals[current_index] << endl;
-              //}
               next_x_vals[current_index] = transformed_x;
               next_y_vals[current_index] = transformed_y;
             }
