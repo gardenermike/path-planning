@@ -19,7 +19,7 @@ using json = nlohmann::json;
 constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
-const double meters_per_timestep = 0.43; // a little bit less than 50 mph
+const double meters_per_timestep = 0.442; // a little bit less than 50 mph
 const double timestep_seconds = 0.05;
 
 // Checks if the SocketIO event has JSON data.
@@ -307,6 +307,8 @@ int main() {
           vector<vector<double>> vehicles_my_lane;
           vector<vector<double>> vehicles_lane_right;
 
+          double safe_distance = 50; // safe gap to leading vehicle
+
           // figure out state based on other vehicles
           // only change plans if we have not already committed to a lane change
           if ((std::chrono::system_clock::now() - lane_change_timestamp).count() > 1) {
@@ -338,7 +340,6 @@ int main() {
             }
 
             // are there any vehicles in my lane?
-            double safe_distance = 50;
             for (int i = 0; i < vehicles_my_lane.size(); i++) {
               auto other = vehicles_my_lane[i];
               int other_index = other[0];
@@ -436,6 +437,35 @@ int main() {
                   turn_right = true;
                   lane_change_timestamp = std::chrono::system_clock::now();
                 }
+              }
+            }
+          }
+
+          // check for any vehicles outside of clear lane boundaries,
+          // and slow down for them
+          for (int i = 0; i < sensor_fusion.size(); i++) {
+            auto other = sensor_fusion[i];
+            //cout << other << endl;
+            int other_index = other[0];
+            double other_x = other[1];
+            double other_y = other[2];
+            double other_vx = other[3];
+            double other_vy = other[4];
+            double other_velocity = sqrt(pow(other_vx, 2) + pow(other_vy, 2)); // scalar velocity
+            double other_s = other[5];
+            double other_d = other[6];
+
+            double s_distance = other_s - car_s;
+            double d_distance = other_d - car_d;
+            double max_d_distance = 4. * 0.75; // a fixed fraction of the lane width
+
+            // Are we close enough to worry?
+            if (s_distance > 0 && s_distance < safe_distance && fabs(d_distance) < max_d_distance) {
+              if (other_velocity < other_vehicle_velocity) {
+                //cout << "vehicle detected! distance: " << s_distance << "\n";
+                other_vehicle_velocity = other_velocity;
+                other_vehicle_distance = s_distance;
+                slow_down = true;
               }
             }
           }
